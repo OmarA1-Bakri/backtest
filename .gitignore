@@ -5,3 +5,6 @@ node_modules/
 temp/
 .tmp.driveupload/
 .tmp*/
+# Terraform
+terraform/.terraform/
+*.exe
