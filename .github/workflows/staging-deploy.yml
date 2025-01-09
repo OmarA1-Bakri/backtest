@@ -1,0 +1,80 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ develop ]
+
+env:
+  DEPLOY_TIMEOUT: 300
+  HEALTH_CHECK_RETRIES: 5
+  HEALTH_CHECK_INTERVAL: 30
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    environment: staging
+    needs: [build-backend, build-frontend]
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Download backend artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: backend-build
+          path: dist
+          
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: frontend-build
+          path: Frontend/dist
+          
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          
+      - name: Run database migrations
+        env:
+          DB_HOST: ${{ secrets.STAGING_DB_HOST }}
+          DB_PORT: ${{ secrets.STAGING_DB_PORT }}
+          DB_NAME: ${{ secrets.STAGING_DB_NAME }}
+          DB_USER: ${{ secrets.STAGING_DB_USER }}
+          DB_PASSWORD: ${{ secrets.STAGING_DB_PASSWORD }}
+        run: |
+          python scripts/manage_db.py migrate
+          python scripts/manage_db.py verify
+          
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+            --cluster ${{ secrets.STAGING_ECS_CLUSTER }} \
+            --service ${{ secrets.STAGING_ECS_SERVICE }} \
+            --force-new-deployment
+            
+      - name: Deploy frontend to S3
+        run: |
+          aws s3 sync Frontend/dist/ s3://${{ secrets.STAGING_FRONTEND_BUCKET }}/ --delete
+          
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.STAGING_CF_DISTRIBUTION }} \
+            --paths "/*"
+            
+      - name: Health check
+        run: |
+          for i in $(seq 1 ${{ env.HEALTH_CHECK_RETRIES }}); do
+            response=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.STAGING_HEALTH_CHECK_URL }})
+            if [ "$response" = "200" ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $i: Health check failed with status $response"
+            sleep ${{ env.HEALTH_CHECK_INTERVAL }}
+          done
+          echo "Health check failed after ${{ env.HEALTH_CHECK_RETRIES }} attempts"
+          exit 1

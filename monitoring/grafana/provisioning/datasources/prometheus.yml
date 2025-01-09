@@ -1,0 +1,14 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    uid: PBFA97CFB590B2093  # Changed to match the dashboard's expected UID
+    isDefault: true
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: "POST"
+    version: 1
+    editable: false

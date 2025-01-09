@@ -1,0 +1,16 @@
+{
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "${DOMAIN_NAME}",
+        "Type": "A",
+        "AliasTarget": {
+          "HostedZoneId": "${ALB_HOSTED_ZONE_ID}",
+          "DNSName": "${BLUE_ALB_DNS}",
+          "EvaluateTargetHealth": true
+        }
+      }
+    }
+  ]
+}

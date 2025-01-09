@@ -1,0 +1,60 @@
+# Core dependencies
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.1
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+python-multipart>=0.0.6
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+email-validator>=2.1.0.post1
+
+# Database
+# Requires PostgreSQL 17.x to be installed in the environment
+SQLAlchemy[asyncio]>=2.0.23
+alembic>=1.12.1
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9  # PostgreSQL Python adapter (requires PostgreSQL 17.x)
+greenlet>=3.0.1  # Required for async SQLAlchemy
+
+# Redis
+redis>=5.0.1
+aioredis>=2.0.1
+
+# Machine learning dependencies
+numpy>=1.26.2
+pandas>=2.1.3
+scikit-learn>=1.3.2
+torch>=2.1.1
+tensorflow>=2.16.1  # Updated to latest stable version
+transformers>=4.35.2
+optuna>=3.4.0
+
+# Testing dependencies
+pytest>=7.4.3
+pytest-asyncio>=0.21.1
+pytest-cov>=4.1.0
+pytest-env>=1.1.1
+pytest-mock>=3.14.0
+httpx>=0.25.1
+
+# Development dependencies
+black>=23.11.0
+flake8>=6.1.0
+isort>=5.12.0
+mypy>=1.7.0
+pre-commit>=3.5.0
+
+# Documentation
+mkdocs>=1.5.3
+mkdocs-material>=9.4.8
+mkdocstrings[python]>=0.23.0
+
+# Monitoring and logging
+prometheus-client>=0.18.0
+opentelemetry-api>=1.21.0
+opentelemetry-sdk>=1.21.0
+opentelemetry-instrumentation-fastapi>=0.42b0
+opentelemetry-instrumentation-sqlalchemy>=0.42b0
+opentelemetry-instrumentation-redis>=0.42b0
+python-json-logger>=2.0.7

@@ -1,0 +1,91 @@
+name: Test Infrastructure
+
+on:
+  pull_request:
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/blue-green-deploy.yml'
+      - '.github/workflows/staging-deploy.yml'
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/blue-green-deploy.yml'
+      - '.github/workflows/staging-deploy.yml'
+
+jobs:
+  terraform-validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.0.0
+      
+      - name: Terraform Format
+        run: terraform fmt -check -recursive
+        working-directory: terraform
+      
+      - name: Terraform Init
+        run: terraform init -backend=false
+        working-directory: terraform
+      
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: terraform
+
+  test-deployment-workflow:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Validate blue-green workflow
+        run: |
+          yamllint .github/workflows/blue-green-deploy.yml
+          actionlint .github/workflows/blue-green-deploy.yml
+      
+      - name: Validate staging workflow
+        run: |
+          yamllint .github/workflows/staging-deploy.yml
+          actionlint .github/workflows/staging-deploy.yml
+      
+      - name: Mock deployment test
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-1
+        run: |
+          # Mock AWS commands for testing
+          function aws() {
+            case "$1" in
+              "ecs")
+                echo "Mocked ECS command"
+                return 0
+                ;;
+              "elbv2")
+                echo "Mocked ELB command"
+                return 0
+                ;;
+              *)
+                echo "Unknown command"
+                return 1
+                ;;
+            esac
+          }
+          export -f aws
+          
+          # Test blue-green deployment script
+          bash -c '
+            source .github/workflows/blue-green-deploy.yml
+            if [[ $? -eq 0 ]]; then
+              echo "Blue-green deployment script test passed"
+              exit 0
+            else
+              echo "Blue-green deployment script test failed"
+              exit 1
+            fi
+          '

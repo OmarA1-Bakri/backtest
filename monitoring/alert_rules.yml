@@ -1,0 +1,52 @@
+groups:
+  - name: strategy_alerts
+    rules:
+      # High Error Rate Alert
+      - alert: HighStrategyErrorRate
+        expr: rate(strategy_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High strategy error rate
+          description: "Strategy {{ $labels.strategy_name }} has high error rate: {{ $value }}"
+
+      # Poor Performance Alert
+      - alert: PoorStrategyPerformance
+        expr: strategy_returns_percent < -10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Poor strategy performance
+          description: "Strategy {{ $labels.strategy_name }} showing poor returns: {{ $value }}%"
+
+      # High Drawdown Alert
+      - alert: HighDrawdown
+        expr: strategy_max_drawdown_percent < -20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High drawdown detected
+          description: "Strategy {{ $labels.strategy_name }} experiencing high drawdown: {{ $value }}%"
+
+      # Execution Time Alert
+      - alert: SlowStrategyExecution
+        expr: histogram_quantile(0.95, rate(strategy_execution_seconds_bucket[5m])) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Slow strategy execution
+          description: "Strategy {{ $labels.strategy_name }} execution time > 5min"
+
+      # Low Sharpe Ratio Alert
+      - alert: LowSharpeRatio
+        expr: strategy_sharpe_ratio < 0.5
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Low Sharpe ratio
+          description: "Strategy {{ $labels.strategy_name }} has low Sharpe ratio: {{ $value }}"

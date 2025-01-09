@@ -1,0 +1,222 @@
+name: Deploy to Production
+
+on:
+  release:
+    types: [published]
+
+env:
+  DEPLOY_TIMEOUT: 300
+  HEALTH_CHECK_RETRIES: 10
+  HEALTH_CHECK_INTERVAL: 30
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Download backend artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: backend-build
+          path: dist
+          
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: frontend-build
+          path: Frontend/dist
+          
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          
+      - name: Create deployment tag
+        run: |
+          echo "DEPLOY_TAG=$(date +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}" >> $GITHUB_ENV
+          
+      - name: Store current state
+        run: |
+          # Store current task definition
+          TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition ${{ secrets.PROD_TASK_DEFINITION }} \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "PREVIOUS_TASK_DEF=$TASK_DEF" >> $GITHUB_ENV
+          
+          # Store current frontend version
+          aws s3 sync s3://${{ secrets.PROD_FRONTEND_BUCKET }} frontend-backup/
+          
+      - name: Run database migrations
+        id: migrations
+        env:
+          DB_HOST: ${{ secrets.PROD_DB_HOST }}
+          DB_PORT: ${{ secrets.PROD_DB_PORT }}
+          DB_NAME: ${{ secrets.PROD_DB_NAME }}
+          DB_USER: ${{ secrets.PROD_DB_USER }}
+          DB_PASSWORD: ${{ secrets.PROD_DB_PASSWORD }}
+        run: |
+          echo "Running database migrations..."
+          python scripts/manage_db.py migrate
+          if [ $? -ne 0 ]; then
+            echo "Database migration failed!"
+            exit 1
+          fi
+          
+          echo "Verifying database schema..."
+          python scripts/manage_db.py verify
+          if [ $? -ne 0 ]; then
+            echo "Schema verification failed!"
+            exit 1
+          fi
+          
+      - name: Deploy green environment
+        id: deploy_green
+        if: success() && steps.migrations.outcome == 'success'
+        run: |
+          # Create new ECS task definition for green environment
+          GREEN_TASK_DEF="${{ secrets.PROD_TASK_DEFINITION }}-green"
+          aws ecs register-task-definition \
+            --family $GREEN_TASK_DEF \
+            --container-definitions file://task-definition.json
+            
+          # Deploy to green environment
+          aws ecs create-service \
+            --cluster ${{ secrets.PROD_ECS_CLUSTER }} \
+            --service-name ${{ secrets.PROD_ECS_SERVICE }}-green \
+            --task-definition $GREEN_TASK_DEF \
+            --desired-count 1
+            
+          # Deploy frontend to green S3 bucket
+          aws s3 sync Frontend/dist/ s3://${{ secrets.PROD_FRONTEND_BUCKET }}-green --delete
+          
+          echo "GREEN_TASK_DEF=$GREEN_TASK_DEF" >> $GITHUB_ENV
+          
+      - name: Health check green environment
+        id: health_check_green
+        if: success() && steps.deploy_green.outcome == 'success'
+        run: |
+          for i in $(seq 1 ${{ env.HEALTH_CHECK_RETRIES }}); do
+            if curl -f https://${{ secrets.PROD_API_URL }}-green/health && \
+               curl -f https://${{ secrets.PROD_FRONTEND_URL }}-green; then
+              echo "Green environment is healthy"
+              exit 0
+            fi
+            
+            echo "Attempt $i: Green environment not healthy yet, waiting..."
+            sleep ${{ env.HEALTH_CHECK_INTERVAL }}
+          done
+          
+          echo "Green environment failed health checks"
+          exit 1
+          
+      - name: Switch traffic to green
+        if: success() && steps.health_check_green.outcome == 'success'
+        run: |
+          # Update Route53 aliases to point to green environment
+          aws route53 change-resource-record-sets \
+            --hosted-zone-id ${{ secrets.ROUTE53_ZONE_ID }} \
+            --change-batch file://route53-update.json
+            
+          # Wait for DNS propagation
+          sleep 60
+          
+          echo "Traffic switched to green environment"
+          
+      - name: Verify production traffic
+        id: verify_production
+        if: success() && steps.health_check_green.outcome == 'success'
+        run: |
+          for i in $(seq 1 ${{ env.HEALTH_CHECK_RETRIES }}); do
+            if curl -f https://${{ secrets.PROD_API_URL }}/health && \
+               curl -f https://${{ secrets.PROD_FRONTEND_URL }}; then
+              echo "Production traffic verified"
+              exit 0
+            fi
+            
+            echo "Attempt $i: Production verification failed, waiting..."
+            sleep ${{ env.HEALTH_CHECK_INTERVAL }}
+          done
+          
+          echo "Production verification failed"
+          exit 1
+          
+      - name: Cleanup blue environment
+        if: success() && steps.verify_production.outcome == 'success'
+        run: |
+          # Delete old blue environment
+          aws ecs delete-service \
+            --cluster ${{ secrets.PROD_ECS_CLUSTER }} \
+            --service ${{ secrets.PROD_ECS_SERVICE }}
+            
+          # Delete blue frontend bucket contents
+          aws s3 rm s3://${{ secrets.PROD_FRONTEND_BUCKET }} --recursive
+          
+          # Rename green to blue
+          aws ecs update-service \
+            --cluster ${{ secrets.PROD_ECS_CLUSTER }} \
+            --service ${{ secrets.PROD_ECS_SERVICE }}-green \
+            --service-name ${{ secrets.PROD_ECS_SERVICE }}
+            
+          aws s3 sync s3://${{ secrets.PROD_FRONTEND_BUCKET }}-green \
+            s3://${{ secrets.PROD_FRONTEND_BUCKET }} --delete
+            
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed! Rolling back..."
+          
+          if [[ "${{ steps.migrations.outcome }}" == "failure" ]]; then
+            echo "Rolling back database migrations..."
+            python scripts/manage_db.py rollback --tag ${{ env.PREVIOUS_MIGRATION_TAG }}
+          elif [[ "${{ steps.health_check_green.outcome }}" == "failure" ]]; then
+            # Green environment failed, just clean it up
+            aws ecs delete-service \
+              --cluster ${{ secrets.PROD_ECS_CLUSTER }} \
+              --service ${{ secrets.PROD_ECS_SERVICE }}-green
+              
+            aws s3 rm s3://${{ secrets.PROD_FRONTEND_BUCKET }}-green --recursive
+          else
+            # Revert Route53 to blue environment
+            aws route53 change-resource-record-sets \
+              --hosted-zone-id ${{ secrets.ROUTE53_ZONE_ID }} \
+              --change-batch file://route53-rollback.json
+              
+            # Restore blue environment
+            aws s3 sync frontend-backup/ s3://${{ secrets.PROD_FRONTEND_BUCKET }} --delete
+            
+            aws ecs update-service \
+              --cluster ${{ secrets.PROD_ECS_CLUSTER }} \
+              --service ${{ secrets.PROD_ECS_SERVICE }} \
+              --task-definition ${{ env.PREVIOUS_TASK_DEF }}
+          fi
+          
+          exit 1
+          
+      - name: Notify deployment status
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow,job,took
+          text: |
+            Deployment to production ${{ job.status }}
+            Environment: ${{ steps.deploy_green.outcome == 'success' && 'GREEN' || 'BLUE' }}
+            Commit: ${{ github.sha }}
+            Migration Status: ${{ steps.migrations.outcome }}
+            ${{ job.status == 'failure' && '⚠️ Rollback completed' || '' }}

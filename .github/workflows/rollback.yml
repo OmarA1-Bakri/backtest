@@ -1,0 +1,121 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to rollback (staging/production)'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      version:
+        description: 'Version tag to rollback to'
+        required: true
+        type: string
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          
+      - name: Validate tag exists
+        run: |
+          if ! git tag | grep -q "^${{ github.event.inputs.version }}$"; then
+            echo "Error: Tag ${{ github.event.inputs.version }} does not exist"
+            exit 1
+          fi
+
+  rollback:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.version }}
+          
+      - name: Download backend artifact
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: build.yml
+          name: backend-build-${{ github.sha }}
+          
+      - name: Download frontend artifact
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: build.yml
+          name: frontend-build-${{ github.sha }}
+          
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          
+      - name: Deploy to ${{ github.event.inputs.environment }}
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+            aws s3 sync Frontend/build/ s3://${{ secrets.PROD_S3_BUCKET }}/
+            aws elasticbeanstalk create-application-version \
+              --application-name backtest \
+              --version-label ${{ github.event.inputs.version }} \
+              --source-bundle S3Bucket=${{ secrets.PROD_S3_BUCKET }},S3Key=backend-build.zip
+            aws elasticbeanstalk update-environment \
+              --environment-name backtest-prod \
+              --version-label ${{ github.event.inputs.version }}
+          else
+            aws s3 sync Frontend/build/ s3://${{ secrets.STAGING_S3_BUCKET }}/
+            aws elasticbeanstalk create-application-version \
+              --application-name backtest \
+              --version-label ${{ github.event.inputs.version }} \
+              --source-bundle S3Bucket=${{ secrets.STAGING_S3_BUCKET }},S3Key=backend-build.zip
+            aws elasticbeanstalk update-environment \
+              --environment-name backtest-staging \
+              --version-label ${{ github.event.inputs.version }}
+          fi
+          
+      - name: Verify deployment
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+            endpoint="${{ secrets.PROD_API_ENDPOINT }}"
+          else
+            endpoint="${{ secrets.STAGING_API_ENDPOINT }}"
+          fi
+          
+          max_attempts=30
+          attempt=1
+          
+          while [ $attempt -le $max_attempts ]; do
+            if curl -s "$endpoint/health" | grep -q "ok"; then
+              echo "Deployment verified successfully"
+              exit 0
+            fi
+            echo "Attempt $attempt: Service not ready yet, waiting..."
+            sleep 10
+            attempt=$((attempt + 1))
+          done
+          
+          echo "Error: Service failed to become healthy after rollback"
+          exit 1
+
+  notify:
+    needs: [rollback]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Notify rollback status
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack-message: |
+            Rollback to version ${{ github.event.inputs.version }} on ${{ github.event.inputs.environment }}
+            Status: ${{ needs.rollback.result == 'success' && ':white_check_mark: Success' || ':x: Failed' }}
+            Triggered by: ${{ github.actor }}

@@ -1,0 +1,7 @@
+node_modules/
+.cache/
+*.log
+*.tmp*.tmp
+temp/
+.tmp.driveupload/
+.tmp*/

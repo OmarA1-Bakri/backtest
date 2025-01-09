@@ -1,0 +1,19 @@
+/* src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --space-blue: #0a192f;
+  --neon-blue: #64ffda;
+  --neon-purple: #b57edc;
+  --chart-blue: #4a9ff5;
+  --chart-purple: #b57edc;
+}
+
+body {
+  background-color: var(--space-blue);
+  color: white;
+}
+
+/* Add any other global styles here */

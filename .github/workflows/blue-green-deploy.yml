@@ -1,0 +1,378 @@
+name: Blue/Green Deployment
+
+on:
+  workflow_run:
+    workflows: ["Deploy to Staging"]
+    types:
+      - completed
+    branches: [develop]
+
+env:
+  DEPLOY_TIMEOUT: 600
+  HEALTH_CHECK_RETRIES: 10
+  HEALTH_CHECK_INTERVAL: 30
+  ROLLBACK_ON_FAILURE: true
+  CANARY_TRAFFIC_PERCENTAGE: 10
+  CANARY_EVALUATION_TIME: 300
+
+jobs:
+  notify-start:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send deployment start notification
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack-message: "🚀 Starting blue/green deployment for BackTest AI"
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+  prepare-deployment:
+    needs: notify-start
+    runs-on: ubuntu-latest
+    environment: staging
+    outputs:
+      target_environment: ${{ steps.determine-target.outputs.environment }}
+      current_environment: ${{ steps.determine-target.outputs.current }}
+
+    steps:
+      - name: Determine target environment
+        id: determine-target
+        run: |
+          current=$(aws ecs describe-services \
+            --cluster ${{ secrets.STAGING_ECS_CLUSTER }} \
+            --services ${{ secrets.STAGING_ECS_SERVICE }} \
+            --query 'services[0].tags[?key==`Environment`].value' \
+            --output text)
+
+          if [ "$current" = "blue" ]; then
+            echo "environment=green" >> $GITHUB_OUTPUT
+          else
+            echo "environment=blue" >> $GITHUB_OUTPUT
+          fi
+          echo "current=$current" >> $GITHUB_OUTPUT
+
+  deploy-new-environment:
+    needs: prepare-deployment
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Deploy new environment
+        id: deploy
+        env:
+          TARGET_ENV: ${{ needs.prepare-deployment.outputs.target_environment }}
+        run: |
+          # Create new task definition for target environment
+          aws ecs create-task-definition \
+            --family ${{ secrets.STAGING_ECS_TASK_FAMILY }}-${TARGET_ENV} \
+            --container-definitions file://ecs/container-definitions.json \
+            --task-role-arn ${{ secrets.STAGING_TASK_ROLE_ARN }} \
+            --execution-role-arn ${{ secrets.STAGING_EXECUTION_ROLE_ARN }} \
+            --network-mode awsvpc \
+            --requires-compatibilities FARGATE \
+            --cpu 256 \
+            --memory 512 \
+            --tags key=Environment,value=${TARGET_ENV}
+
+          # Create new target group
+          target_group_arn=$(aws elbv2 create-target-group \
+            --name staging-tg-${TARGET_ENV} \
+            --protocol HTTP \
+            --port 80 \
+            --vpc-id ${{ secrets.STAGING_VPC_ID }} \
+            --target-type ip \
+            --health-check-path /health \
+            --health-check-interval-seconds 10 \
+            --healthy-threshold-count 2 \
+            --unhealthy-threshold-count 2 \
+            --query 'TargetGroups[0].TargetGroupArn' \
+            --output text)
+
+          # Update service with new task definition and target group
+          aws ecs update-service \
+            --cluster ${{ secrets.STAGING_ECS_CLUSTER }} \
+            --service ${{ secrets.STAGING_ECS_SERVICE }} \
+            --task-definition ${{ secrets.STAGING_ECS_TASK_FAMILY }}-${TARGET_ENV} \
+            --load-balancers targetGroupArn=${target_group_arn},containerName=app,containerPort=80 \
+            --force-new-deployment
+
+          echo "target_group_arn=${target_group_arn}" >> $GITHUB_OUTPUT
+
+      - name: Health check
+        env:
+          TARGET_GROUP_ARN: ${{ steps.deploy.outputs.target_group_arn }}
+        run: |
+          for i in $(seq 1 ${{ env.HEALTH_CHECK_RETRIES }}); do
+            # Check target health
+            health=$(aws elbv2 describe-target-health \
+              --target-group-arn ${TARGET_GROUP_ARN} \
+              --query 'TargetHealthDescriptions[0].TargetHealth.State' \
+              --output text)
+            
+            # Check ECS service stability
+            service_stable=$(aws ecs describe-services \
+              --cluster ${{ secrets.STAGING_ECS_CLUSTER }} \
+              --services ${{ secrets.STAGING_ECS_SERVICE }} \
+              --query 'services[0].deployments[0].rolloutState' \
+              --output text)
+            
+            if [ "$health" = "healthy" ] && [ "$service_stable" = "COMPLETED" ]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $i: Target health is $health, Service state is $service_stable"
+            sleep ${{ env.HEALTH_CHECK_INTERVAL }}
+          done
+          echo "Health check failed after ${{ env.HEALTH_CHECK_RETRIES }} attempts"
+          exit 1
+
+  canary-deployment:
+    needs: [prepare-deployment, deploy-new-environment]
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Start canary traffic shift
+        id: canary
+        env:
+          TARGET_GROUP_ARN: ${{ steps.deploy.outputs.target_group_arn }}
+          OLD_ENV: ${{ needs.prepare-deployment.outputs.current_environment }}
+        run: |
+          # Get old target group ARN
+          old_tg_arn=$(aws elbv2 describe-target-groups \
+            --names staging-tg-${OLD_ENV} \
+            --query 'TargetGroups[0].TargetGroupArn' \
+            --output text)
+
+          # Update listener rule for canary traffic
+          aws elbv2 modify-listener \
+            --listener-arn ${{ secrets.STAGING_LISTENER_ARN }} \
+            --default-actions '[
+              {
+                "Type": "forward",
+                "ForwardConfig": {
+                  "TargetGroups": [
+                    {
+                      "TargetGroupArn": "'${TARGET_GROUP_ARN}'",
+                      "Weight": ${{ env.CANARY_TRAFFIC_PERCENTAGE }}
+                    },
+                    {
+                      "TargetGroupArn": "'${old_tg_arn}'",
+                      "Weight": $((100 - ${{ env.CANARY_TRAFFIC_PERCENTAGE }}))
+                    }
+                  ]
+                }
+              }
+            ]'
+
+          echo "old_target_group_arn=${old_tg_arn}" >> $GITHUB_OUTPUT
+
+      - name: Monitor canary metrics
+        env:
+          TARGET_GROUP_ARN: ${{ steps.deploy.outputs.target_group_arn }}
+        run: |
+          echo "Monitoring canary deployment for ${{ env.CANARY_EVALUATION_TIME }} seconds..."
+          sleep ${{ env.CANARY_EVALUATION_TIME }}
+
+          # Check error rate
+          errors=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name HTTPCode_Target_5XX_Count \
+            --dimensions Name=TargetGroup,Value=${TARGET_GROUP_ARN} \
+            --start-time $(date -u -v-5M +"%Y-%m-%dT%H:%M:%SZ") \
+            --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+            --period 300 \
+            --statistics Sum \
+            --query 'Datapoints[0].Sum' \
+            --output text)
+
+          # Check latency
+          latency=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name TargetResponseTime \
+            --dimensions Name=TargetGroup,Value=${TARGET_GROUP_ARN} \
+            --start-time $(date -u -v-5M +"%Y-%m-%dT%H:%M:%SZ") \
+            --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+            --period 300 \
+            --statistics Average \
+            --query 'Datapoints[0].Average' \
+            --output text)
+
+          if [ "$errors" -gt 10 ] || [ "$latency" -gt 1 ]; then
+            echo "Canary metrics exceeded thresholds: $errors errors, ${latency}s latency"
+            exit 1
+          fi
+
+          echo "Canary metrics within acceptable range"
+
+  switch-traffic:
+    needs: [prepare-deployment, deploy-new-environment, canary-deployment]
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update load balancer
+        env:
+          TARGET_GROUP_ARN: ${{ steps.deploy.outputs.target_group_arn }}
+        run: |
+          aws elbv2 modify-listener \
+            --listener-arn ${{ secrets.STAGING_LISTENER_ARN }} \
+            --default-actions Type=forward,TargetGroupArn=${TARGET_GROUP_ARN}
+
+      - name: Monitor deployment
+        env:
+          TARGET_GROUP_ARN: ${{ steps.deploy.outputs.target_group_arn }}
+        run: |
+          echo "Monitoring deployment for ${{ env.DEPLOY_TIMEOUT }} seconds..."
+          sleep ${{ env.DEPLOY_TIMEOUT }}
+
+          # Check error rate
+          errors=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name HTTPCode_Target_5XX_Count \
+            --dimensions Name=TargetGroup,Value=${TARGET_GROUP_ARN} \
+            --start-time $(date -u -v-5M +"%Y-%m-%dT%H:%M:%SZ") \
+            --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+            --period 300 \
+            --statistics Sum \
+            --query 'Datapoints[0].Sum' \
+            --output text)
+
+          # Check latency
+          latency=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/ApplicationELB \
+            --metric-name TargetResponseTime \
+            --dimensions Name=TargetGroup,Value=${TARGET_GROUP_ARN} \
+            --start-time $(date -u -v-5M +"%Y-%m-%dT%H:%M:%SZ") \
+            --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+            --period 300 \
+            --statistics Average \
+            --query 'Datapoints[0].Average' \
+            --output text)
+
+          if [ "$errors" -gt 10 ] || [ "$latency" -gt 1 ]; then
+            echo "Error metrics exceeded thresholds: $errors errors, ${latency}s latency"
+            exit 1
+          fi
+
+          echo "Deployment metrics within acceptable range"
+
+  cleanup:
+    needs: [prepare-deployment, switch-traffic]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Cleanup old environment
+        if: needs.switch-traffic.result == 'success'
+        env:
+          OLD_ENV: ${{ needs.prepare-deployment.outputs.current_environment }}
+        run: |
+          # Delete old target group
+          old_tg_arn=$(aws elbv2 describe-target-groups \
+            --names staging-tg-${OLD_ENV} \
+            --query 'TargetGroups[0].TargetGroupArn' \
+            --output text)
+
+          aws elbv2 delete-target-group \
+            --target-group-arn ${old_tg_arn}
+
+          # Deregister old task definition
+          aws ecs deregister-task-definition \
+            --task-definition ${{ secrets.STAGING_ECS_TASK_FAMILY }}-${OLD_ENV}
+
+  rollback:
+    needs: [prepare-deployment, deploy-new-environment, canary-deployment, switch-traffic]
+    runs-on: ubuntu-latest
+    if: |
+      needs.deploy-new-environment.result == 'failure' ||
+      needs.canary-deployment.result == 'failure' ||
+      needs.switch-traffic.result == 'failure'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Rollback deployment
+        env:
+          OLD_ENV: ${{ needs.prepare-deployment.outputs.current_environment }}
+        run: |
+          # Switch back to old target group
+          old_tg_arn=$(aws elbv2 describe-target-groups \
+            --names staging-tg-${OLD_ENV} \
+            --query 'TargetGroups[0].TargetGroupArn' \
+            --output text)
+
+          aws elbv2 modify-listener \
+            --listener-arn ${{ secrets.STAGING_LISTENER_ARN }} \
+            --default-actions Type=forward,TargetGroupArn=${old_tg_arn}
+
+          # Cleanup failed deployment
+          aws ecs update-service \
+            --cluster ${{ secrets.STAGING_ECS_CLUSTER }} \
+            --service ${{ secrets.STAGING_ECS_SERVICE }} \
+            --task-definition ${{ secrets.STAGING_ECS_TASK_FAMILY }}-${OLD_ENV} \
+            --force-new-deployment
+
+      - name: Send rollback notification
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack-message: "🚨 Deployment failed! Rolling back to previous version."
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+  notify-completion:
+    needs: [prepare-deployment, deploy-new-environment, canary-deployment, switch-traffic, cleanup]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Send completion notification
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL_ID }}
+          slack-message: |
+            Deployment Status:
+            - Preparation: ${{ needs.prepare-deployment.result }}
+            - Deployment: ${{ needs.deploy-new-environment.result }}
+            - Canary: ${{ needs.canary-deployment.result }}
+            - Traffic Switch: ${{ needs.switch-traffic.result }}
+            - Cleanup: ${{ needs.cleanup.result }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
