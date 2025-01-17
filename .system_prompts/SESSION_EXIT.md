@@ -1,13 +1,13 @@
 ## Session Exit Prompt
 [Version: 2025.01.17.1]
-Last Updated: 2025-01-17T19:01:08Z
+Last Updated: 2025-01-17T19:49:20Z
 
 **Objective**  
 Perform a detailed review of this session and update project documentation accordingly.
 
 ### 1. End Session and Generate Report
 ```bash
-python -m project_control.scripts.session_manager end
+python .project_control/scripts/session_manager.py end
 ```
 Review the generated report for:
 - Completed tasks
@@ -18,17 +18,17 @@ Review the generated report for:
 ### 2. Review Session Artifacts
 
 1. **Session Report**
-   - Location: `project_control/reports/sessions/`
+   - Location: `.project_control/history/`
    - Review auto-generated end-of-session report
    - Verify metrics and progress
 
 2. **Master Checklist**
-   - Location: `project_control/state/master_checklist.yaml`
+   - Location: `.project_control/state/checklists/`
    - Verify task status updates
    - Ensure new tasks are added if created
 
 3. **Documentation Updates**
-   - Guidelines: `project_control/guidelines/`
+   - Guidelines: `.project_control/guidelines/documentation_standards.md`
    - API docs: `docs/api/`
    - Examples: `docs/examples/`
 
@@ -45,7 +45,7 @@ Review the generated report for:
    - Verify monitoring setup
 
 3. **Configuration**
-   - Verify `config/env/` files
+   - Verify `.project_control/config/env/` files
    - Check for sensitive data exposure
    - Validate environment settings
 
@@ -66,8 +66,12 @@ Review the generated report for:
    - All TODOs captured in checklist
    - Dependencies up to date
 
+### 5. Backup Verification
+- Check backup in `.project_control/backups/`
+- Verify all changes are committed to git
+
 **Reminder**:  
 - The session manager handles auto-commits and report generation
 - Follow the project structure for all updates
 - Keep documentation in sync with changes
-- Use `python -m project_control.scripts.session_manager status` for final verification
+- Use `python .project_control/scripts/session_manager.py status` for final verification

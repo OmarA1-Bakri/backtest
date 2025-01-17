@@ -7,7 +7,7 @@ Every time you receive a user prompt, you must:
 
 1. **Check Session Status**
    ```bash
-   python -m project_control.scripts.session_manager status
+   python .project_control/scripts/session_manager.py status
    ```
    Review the status report to understand:
    - Current progress
@@ -49,9 +49,43 @@ Every time you receive a user prompt, you must:
 
 7. **End Major Changes**
    ```bash
-   python -m project_control.scripts.session_manager status
+   python .project_control/scripts/session_manager.py end
    ```
    Verify all changes are tracked and documented
+
+## Session Management Commands
+
+### Update Checklist
+```bash
+python .project_control/scripts/checklist_manager.py update [category] [item] [status]
+```
+
+## Documentation Guidelines
+
+### File Organization
+- Chat histories: @[.project_control/history/chats/]
+- Checkpoints: @[.project_control/history/checkpoints/]
+- Code reviews: @[.project_control/reviews/]
+- Project state: @[.project_control/state/]
+
+### Templates
+Use appropriate templates from @[.project_control/templates/]:
+- Documents: `document_template.md`
+- Checklists: `checklist_template.yaml`
+- Session reports: `session_report_template.md`
+
+### Standards
+Follow guidelines in:
+- @[.project_control/guidelines/documentation_standards.md]
+- @[.project_control/INDEX.md]
+
+## Cross-References
+- Files: `@[filename]`
+- Sections: `#[section-name]`
+- Metrics: `$[metric-name]`
+
+## Project Structure
+See @[.project_control/INDEX.md] for complete project organization.
 
 Remember:
 - Keep codebase integrity

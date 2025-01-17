@@ -9,49 +9,77 @@ You are tasked with reviewing the BackTest project—an advanced algorithmic tra
 2. Provide **actionable recommendations** to advance toward deployment.  
 3. **Update the roadmap** with **high-impact** next steps.
 
-### Session Management
-Before starting your review, initialize a new session:
-```bash
-python -m project_control.scripts.session_manager start
+### Project Structure and Management Commands
+
+### Project Organization
+The project uses `.project_control` as the central hub for project management:
+```
+.project_control/
+├── backups/       # Automated backups
+├── guidelines/    # Project standards
+├── history/      # Development history
+│   ├── chats/    # Chat histories
+│   └── checkpoints/ # Development checkpoints
+├── reviews/      # Code reviews
+├── scripts/      # Management scripts
+├── state/        # Project state
+└── templates/    # Document templates
 ```
 
-### Project Structure
-The project follows a clean, organized structure:
+### Session Management
+Use the following commands to manage development sessions:
+```bash
+# Start a new session
+python .project_control/scripts/session_manager.py start
 
-1. **Core Components** (`core/`)
-   - Broker simulation (`broker/`)
-   - Data processing (`data/`)
-   - Trading strategies (`strategies/`)
+# Check session status
+python .project_control/scripts/session_manager.py status
 
-2. **Infrastructure** (`infrastructure/`)
-   - Workers and tasks (`workers/`)
-   - Dependencies
-   - Monitoring
+# End session and generate report
+python .project_control/scripts/session_manager.py end
+```
 
-3. **Configuration** (`config/`)
-   - Environment files (`env/`)
-   - Settings
+### Project State
+Track development progress using:
+```bash
+# View current checklist
+python .project_control/scripts/checklist_manager.py view
 
-4. **Project Control** (`project_control/`)
-   - Guidelines (`guidelines/`)
-   - Session management (`scripts/`)
-   - State tracking (`state/`)
-   - Reports (`reports/`)
+# Update checklist item
+python .project_control/scripts/checklist_manager.py update [category] [item] [status]
+
+# Generate checklist report
+python .project_control/scripts/checklist_manager.py report
+```
+
+### Documentation
+- All documentation follows standards in @[.project_control/guidelines/documentation_standards.md]
+- Use templates from @[.project_control/templates/] for new documents
+- Store chat histories in @[.project_control/history/chats/]
+- Record checkpoints in @[.project_control/history/checkpoints/]
+- Code reviews go in @[.project_control/reviews/]
+
+### Cross-References
+- Use `@[filename]` for file references
+- Use `#[section-name]` for section references
+- Use `$[metric-name]` for metric references
+
+For more details, refer to @[.project_control/INDEX.md]
 
 ### Development Process
 1. Start each session with:
    ```bash
-   python -m project_control.scripts.session_manager start
+   python .project_control/scripts/session_manager.py start
    ```
 
 2. Check progress during development:
    ```bash
-   python -m project_control.scripts.session_manager status
+   python .project_control/scripts/session_manager.py status
    ```
 
 3. End session and generate report:
    ```bash
-   python -m project_control.scripts.session_manager end
+   python .project_control/scripts/session_manager.py end
    ```
 
 ### References & Constraints

@@ -1,0 +1,81 @@
+version: 'YYYY.MM.DD.N'
+last_updated: 'YYYY-MM-DDThh:mm:ssZ'
+title: '[Checklist Title]'
+description: '[Checklist Description]'
+
+metadata:
+  owner: '[Owner Name]'
+  team: '[Team Name]'
+  priority: '[high|medium|low]'
+  deadline: 'YYYY-MM-DD'
+
+dependencies:
+  required_items:
+    - '@[dependency1]'
+    - '@[dependency2]'
+  blockers:
+    - '@[blocker1]'
+    - '@[blocker2]'
+
+categories:
+  category1:
+    title: '[Category Title]'
+    description: '[Category Description]'
+    items:
+      item1:
+        title: '[Item Title]'
+        description: '[Item Description]'
+        status: '[pending|in_progress|completed|blocked]'
+        priority: '[high|medium|low]'
+        assignee: '[Assignee Name]'
+        deadline: 'YYYY-MM-DD'
+        dependencies:
+          - '@[dependency1]'
+        metrics:
+          - '$[metric1]'
+        notes: '[Additional Notes]'
+
+  category2:
+    title: '[Category Title]'
+    description: '[Category Description]'
+    items:
+      item1:
+        title: '[Item Title]'
+        description: '[Item Description]'
+        status: '[pending|in_progress|completed|blocked]'
+        priority: '[high|medium|low]'
+        assignee: '[Assignee Name]'
+        deadline: 'YYYY-MM-DD'
+        dependencies:
+          - '@[dependency1]'
+        metrics:
+          - '$[metric1]'
+        notes: '[Additional Notes]'
+
+metrics:
+  completion:
+    total_items: 0
+    completed: 0
+    in_progress: 0
+    blocked: 0
+    pending: 0
+  
+  priorities:
+    high: 0
+    medium: 0
+    low: 0
+
+  timeline:
+    start_date: 'YYYY-MM-DD'
+    target_completion: 'YYYY-MM-DD'
+    actual_completion: null
+    
+  dependencies:
+    blocking_items: 0
+    blocked_items: 0
+
+review_status:
+  last_review: 'YYYY-MM-DD'
+  reviewer: '[Reviewer Name]'
+  status: '[approved|pending|rejected]'
+  comments: '[Review Comments]'
