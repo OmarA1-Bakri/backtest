@@ -1,54 +1,73 @@
 ## Session Exit Prompt
+[Version: 2025.01.17.1]
+Last Updated: 2025-01-17T19:01:08Z
 
 **Objective**  
 Perform a detailed review of this session and update project documentation accordingly.
 
----
+### 1. End Session and Generate Report
+```bash
+python -m project_control.scripts.session_manager end
+```
+Review the generated report for:
+- Completed tasks
+- Modified files
+- Metrics changes
+- Session duration
 
-### 1. Review Chat History + Session Checklist
+### 2. Review Session Artifacts
 
-- **File to Reference**: @chat 10 - 08_01_25.md (do not uppdate this file - it is purely for review and reflection on what has been achieved in the session - it provides a linear and complete hidtory of the session)
-- **Previous SESSION CHECKLIST**: Review the  session checklist  @SessionChecklist.md for additional context
-- **Action**: Identify key actions, decisions, unresolved items, and insights from the session.
+1. **Session Report**
+   - Location: `project_control/reports/sessions/`
+   - Review auto-generated end-of-session report
+   - Verify metrics and progress
 
----
+2. **Master Checklist**
+   - Location: `project_control/state/master_checklist.yaml`
+   - Verify task status updates
+   - Ensure new tasks are added if created
 
-### 2. Review Update Documentation
+3. **Documentation Updates**
+   - Guidelines: `project_control/guidelines/`
+   - API docs: `docs/api/`
+   - Examples: `docs/examples/`
 
-1. @development_checklist.md  
-   - Reflect new tasks completed during the session.  
-   - Flag any tasks still pending or requiring follow-up.  
-   - Ensure changes align with @DEVELOPMENT_GUIDELINES.md.
+### 3. Verify File Organization
 
-2. @README.md  
-   - Document relevant changes, improvements, or context discovered during this session.  
-   - Highlight any shifts in project direction or clarifications made.
+1. **Core Components**
+   - Check changes in `core/`
+   - Verify broker/data processing updates
+   - Review strategy modifications
 
----
+2. **Infrastructure**
+   - Review `infrastructure/` changes
+   - Check worker configurations
+   - Verify monitoring setup
 
-### 3. Create a New Checkpoint File
+3. **Configuration**
+   - Verify `config/env/` files
+   - Check for sensitive data exposure
+   - Validate environment settings
 
-- **File Title**:project_context\checkpoint_33.md  
-- **Template Reference**: Use @checkpoint_33.md and @checkpoint_32.md for formatting.  
-- **Contents**: Summarize the current development state, list key achievements, and outline next steps or considerations.  
-- Ensure consistency with **prior checkpoint** files and session insights.
+### 4. Final Checks
 
----
+1. **Code Quality**
+   - All tests passing
+   - Documentation updated
+   - No sensitive data exposed
 
-### 4. Ensure Accuracy
+2. **Git Status**
+   - Clean working directory
+   - Meaningful commit messages
+   - No untracked files
 
-- **Cross-Check** all additions or edits with previous documents to avoid conflicts or duplication.  
-- **Confirm** that all references to changes, tasks, or decisions match the chat history.
-
----
-
-### 5. Maintain File References
-
-- **Naming Conventions**: Keep the existing file naming structure.  
-- **Version Control**: If applicable, commit changes with descriptive messages for traceability.
-
----
+3. **Project State**
+   - Clear next steps documented
+   - All TODOs captured in checklist
+   - Dependencies up to date
 
 **Reminder**:  
-- Follow **minimal-change** principles—only update relevant sections based on this session’s outcomes.  
-- Adhere to your @DEVELOPMENT_GUIDELINES.md for code, testing, security, and AI collaboration best practices.
+- The session manager handles auto-commits and report generation
+- Follow the project structure for all updates
+- Keep documentation in sync with changes
+- Use `python -m project_control.scripts.session_manager status` for final verification
