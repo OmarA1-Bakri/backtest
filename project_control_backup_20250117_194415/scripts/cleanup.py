@@ -7,22 +7,27 @@ import git
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
 
 class ProjectCleanup:
     def __init__(self, root_dir: str = None):
         self.root_dir = Path(root_dir or os.getcwd())
-        self.backup_dir = self.root_dir / "project_control" / "backups" / datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.backup_dir = (
+            self.root_dir
+            / "project_control"
+            / "backups"
+            / datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
         self.repo = git.Repo(self.root_dir)
 
     def create_backup(self, file_path: Path) -> Path:
         """Create backup of a file before moving/deleting it."""
         if not file_path.exists():
             return None
-        
+
         backup_path = self.backup_dir / file_path.relative_to(self.root_dir)
         backup_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(file_path, backup_path)
@@ -40,7 +45,7 @@ class ProjectCleanup:
             "project_control/state",
             "project_control/reports/sessions",
         ]
-        
+
         for dir_path in directories:
             full_path = self.root_dir / dir_path
             full_path.mkdir(parents=True, exist_ok=True)
@@ -57,13 +62,13 @@ class ProjectCleanup:
             ".env": "config/env/.env",
             ".env.test": "config/env/.env.test",
             "DEVELOPMENT_GUIDELINES.md": "project_control/guidelines/development.md",
-            "DEPLOYMENT.md": "project_control/guidelines/deployment.md"
+            "DEPLOYMENT.md": "project_control/guidelines/deployment.md",
         }
 
         for src, dst in moves.items():
             src_path = self.root_dir / src
             dst_path = self.root_dir / dst
-            
+
             if src_path.exists():
                 self.create_backup(src_path)
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,7 +83,7 @@ class ProjectCleanup:
             "all-files.txt",
             "sorted-files.txt",
             ".coverage",
-            "coverage.xml"
+            "coverage.xml",
         ]
 
         for file in files_to_remove:
@@ -94,7 +99,9 @@ class ProjectCleanup:
         """Commit the reorganization changes."""
         try:
             self.repo.git.add(A=True)
-            self.repo.index.commit("Project reorganization: Clean up root directory structure")
+            self.repo.index.commit(
+                "Project reorganization: Clean up root directory structure"
+            )
             logger.info("Changes committed to git")
         except Exception as e:
             logger.error(f"Failed to commit changes: {e}")
@@ -102,7 +109,7 @@ class ProjectCleanup:
     def cleanup(self):
         """Execute the cleanup process."""
         logger.info("Starting project cleanup...")
-        
+
         try:
             self.create_directories()
             self.move_files()
@@ -113,9 +120,11 @@ class ProjectCleanup:
             logger.error(f"Cleanup failed: {e}")
             raise
 
+
 def main():
     cleanup = ProjectCleanup()
     cleanup.cleanup()
+
 
 if __name__ == "__main__":
     main()
