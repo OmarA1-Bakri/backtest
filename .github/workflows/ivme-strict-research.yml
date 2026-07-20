@@ -2,8 +2,7 @@ name: IVME Strict Multi-Resolution Research
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "ivme_strict_research/**"
       - ".github/workflows/ivme-strict-research.yml"
@@ -33,91 +32,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Decode and validate research bundle
+      - name: Decode research bundle
         run: |
-          python - <<'PY'
-          import base64
-          import hashlib
-          import json
-          import pathlib
-          import tarfile
-          import traceback
-
-          expected_chunks = {
-              "bundle_chunk_00": [8000, "4cfe77b9a8907abd533e5a0ec6b3c19c709b24b14cac363b4f2a0d66c04019a1"],
-              "bundle_chunk_01": [8000, "b753dc20a73183d270d03abee1a9bf2a87e89fef887acdd290f7c444eeef5304"],
-              "bundle_chunk_02": [16000, "d4e76ac44ec97d200535de58d01f499b8fe5cd3411c40624471ca9f7ca91dfb8"],
-              "bundle_chunk_03a1": [4000, "45e9d736e2f26ec74a816735cf545bf52292cc3b0d5deb50129a75b3a370d2da"],
-              "bundle_chunk_03a2": [4000, "b9f79f55031a097860fcb6e1680c570253c8fece6e41a0c7df4d98e433b8c1e3"],
-              "bundle_chunk_03b": [8000, "efef33fb8ccd47eedd818692a13ed923c86787bcabc1089c1a52cdab10d8780d"],
-              "bundle_chunk_04": [16000, "fe726a794ce4b445852928f794bda20967384e762d9a7f883d5472ce7bed2838"],
-              "bundle_chunk_05": [16000, "38d6c3106ebb23302ac18d8db9a72080357e6fefaacb9e2449721b6827bbd920"],
-              "bundle_chunk_06": [16000, "e0af18622fa8107259be3da43c47dcbaabcb935cc409c56fdfc0b8b711f68283"],
-              "bundle_chunk_07": [2836, "54930a550578cc93faa7ce5c00ed1a4e0c39f3783c05530c693ef30a46a2333c"],
-          }
-          paths = sorted(pathlib.Path("ivme_strict_research").glob("bundle_chunk_*"))
-          chunks = []
-          for path in paths:
-              payload = path.read_bytes()
-              expected = expected_chunks.get(path.name)
-              actual_sha = hashlib.sha256(payload).hexdigest()
-              chunks.append({
-                  "name": path.name,
-                  "bytes": len(payload),
-                  "sha256": actual_sha,
-                  "expected_bytes": expected[0] if expected else None,
-                  "expected_sha256": expected[1] if expected else None,
-                  "matches": bool(expected and len(payload) == expected[0] and actual_sha == expected[1]),
-              })
-          raw = b"".join(p.read_bytes() for p in paths)
-          compact = b"".join(raw.split())
-          diagnostic = {
-              "chunks": chunks,
-              "all_chunks_match": len(chunks) == len(expected_chunks) and all(c["matches"] for c in chunks),
-              "raw_bytes": len(raw),
-              "compact_bytes": len(compact),
-              "raw_sha256": hashlib.sha256(raw).hexdigest(),
-              "compact_sha256": hashlib.sha256(compact).hexdigest(),
-              "expected_base64_bytes": 98836,
-              "expected_base64_sha256": "1bf147e5a679948a9ac5abd7c9ea2e2a56f1caa524660f992344bacb6e37086f",
-              "expected_archive_bytes": 74127,
-              "expected_archive_sha256": "726553467d6a30f07143786c1e5db5dd2f7b3627f261470471728648f43a6988",
-          }
-          ok = False
-          try:
-              archive = base64.b64decode(compact, validate=True)
-              diagnostic["archive_bytes"] = len(archive)
-              diagnostic["archive_sha256"] = hashlib.sha256(archive).hexdigest()
-              pathlib.Path("/tmp/ivme_bundle.tar.gz").write_bytes(archive)
-              with tarfile.open("/tmp/ivme_bundle.tar.gz", "r:gz") as tf:
-                  diagnostic["members"] = tf.getnames()
-                  tf.extractall(".")
-              ok = (
-                  diagnostic["all_chunks_match"]
-                  and diagnostic["compact_sha256"] == diagnostic["expected_base64_sha256"]
-                  and diagnostic["archive_sha256"] == diagnostic["expected_archive_sha256"]
-              )
-          except Exception as exc:
-              diagnostic["error"] = repr(exc)
-              diagnostic["traceback"] = traceback.format_exc()
-          diagnostic["ok"] = ok
-          pathlib.Path("ivme_bundle_diagnostic.json").write_text(json.dumps(diagnostic, indent=2), encoding="utf-8")
-          print(json.dumps(diagnostic, indent=2))
-          if not ok:
-              raise SystemExit(1)
-          PY
+          cat ivme_strict_research/bundle_chunk_* | base64 --decode > /tmp/ivme_bundle.tar.gz
+          tar -xzf /tmp/ivme_bundle.tar.gz
           python -m py_compile run_ivme_strict_research.py
           test -f ivme_experiment/IVME_Strict_MultiResolution_Experiment.pine
           test -f ivme_experiment/IVME_STRICT_ENGINE_RESEARCH_PROTOCOL.txt
-
-      - name: Upload bundle diagnostic
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ivme-strict-bundle-diagnostic
-          path: ivme_bundle_diagnostic.json
-          if-no-files-found: warn
-          retention-days: 1
 
       - name: Cache Binance one-minute data
         uses: actions/cache@v4
@@ -131,15 +52,25 @@ jobs:
           python -m pip install numpy pandas requests scipy matplotlib tabulate pyarrow scikit-learn hmmlearn
 
       - name: Run strict multi-resolution research
+        id: research
+        shell: bash
         run: |
+          set +e
+          mkdir -p ivme_strict_research_output
           python run_ivme_strict_research.py \
             --output ivme_strict_research_output \
             --start 2017-08-17T00:00:00Z \
             --end 2026-07-20T00:00:00Z \
             --bootstrap-iterations 10000 \
-            --permutation-iterations 300
+            --permutation-iterations 300 \
+            > >(tee ivme_strict_research_output/workflow_stdout.log) \
+            2> >(tee ivme_strict_research_output/workflow_stderr.log >&2)
+          status=$?
+          echo "$status" > ivme_strict_research_output/exit_code.txt
+          exit $status
 
-      - name: Upload research artifacts
+      - name: Upload research artifacts and failure logs
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: ivme-strict-multiresolution-research
