@@ -1,0 +1,39 @@
+name: IVME Runner Inspection
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "ivme_validation/**"
+      - ".github/workflows/ivme-runner-inspection.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out inspection branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Decode and validate runner
+        run: |
+          mkdir -p ivme_runner_source
+          cat ivme_validation/payload_* | base64 --decode | gzip --decompress > ivme_runner_source/run_ivme_validation.py
+          python -m py_compile ivme_runner_source/run_ivme_validation.py
+          wc -l ivme_runner_source/run_ivme_validation.py | tee ivme_runner_source/metadata.txt
+          sha256sum ivme_runner_source/run_ivme_validation.py | tee -a ivme_runner_source/metadata.txt
+
+      - name: Upload runner source
+        uses: actions/upload-artifact@v4
+        with:
+          name: ivme-runner-source
+          path: ivme_runner_source/
+          if-no-files-found: error
+          retention-days: 1
