@@ -1,14 +1,16 @@
 name: IVME Strict Multi-Resolution Research
 
 on:
-  push:
+  pull_request:
     branches:
-      - tmp/ivme-strict-research-20260720
+      - main
     paths:
+      - "ivme_strict_research/**"
       - ".github/workflows/ivme-strict-research.yml"
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   research:
@@ -23,7 +25,7 @@ jobs:
       - name: Check out research branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
 
       - name: Set up Python
@@ -67,9 +69,12 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Remove temporary execution branch
+      - name: Clean up temporary pull request and branch
         if: ${{ success() }}
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
-          git push origin --delete "$GITHUB_REF_NAME" || true
+          gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --comment "Temporary IVME strict research completed; artifacts uploaded. Closing and removing the execution branch."
+          git push origin --delete "$HEAD_REF" || true
