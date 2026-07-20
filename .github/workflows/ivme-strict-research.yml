@@ -87,3 +87,5 @@ jobs:
         run: |
           gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --comment "Temporary IVME strict research completed; artifacts uploaded. Closing and removing the execution branch."
           git push origin --delete "$HEAD_REF" || true
+
+# Traceback-capture rerun: 2026-07-20T14:50Z
