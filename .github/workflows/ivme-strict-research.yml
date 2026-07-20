@@ -44,13 +44,61 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install numpy pandas requests scipy matplotlib tabulate pyarrow scikit-learn hmmlearn
 
-      - name: Decode research bundle
+      - name: Decode and validate research bundle
         run: |
-          cat ivme_strict_research/bundle_chunk_* | base64 --decode > /tmp/ivme_bundle.tar.gz
-          tar -xzf /tmp/ivme_bundle.tar.gz
+          python - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import pathlib
+          import tarfile
+          import traceback
+
+          paths = sorted(pathlib.Path("ivme_strict_research").glob("bundle_chunk_*"))
+          raw = b"".join(p.read_bytes() for p in paths)
+          compact = b"".join(raw.split())
+          diagnostic = {
+              "chunks": [{"name": p.name, "bytes": p.stat().st_size} for p in paths],
+              "raw_bytes": len(raw),
+              "compact_bytes": len(compact),
+              "raw_sha256": hashlib.sha256(raw).hexdigest(),
+              "compact_sha256": hashlib.sha256(compact).hexdigest(),
+              "expected_base64_bytes": 98836,
+              "expected_base64_sha256": "1bf147e5a679948a9ac5abd7c9ea2e2a56f1caa524660f992344bacb6e37086f",
+              "expected_archive_bytes": 74127,
+              "expected_archive_sha256": "726553467d6a30f07143786c1e5db5dd2f7b3627f261470471728648f43a6988",
+          }
+          ok = False
+          try:
+              archive = base64.b64decode(compact, validate=True)
+              diagnostic["archive_bytes"] = len(archive)
+              diagnostic["archive_sha256"] = hashlib.sha256(archive).hexdigest()
+              pathlib.Path("/tmp/ivme_bundle.tar.gz").write_bytes(archive)
+              with tarfile.open("/tmp/ivme_bundle.tar.gz", "r:gz") as tf:
+                  diagnostic["members"] = tf.getnames()
+                  tf.extractall(".")
+              ok = True
+          except Exception as exc:
+              diagnostic["error"] = repr(exc)
+              diagnostic["traceback"] = traceback.format_exc()
+          diagnostic["ok"] = ok
+          pathlib.Path("ivme_bundle_diagnostic.json").write_text(json.dumps(diagnostic, indent=2), encoding="utf-8")
+          print(json.dumps(diagnostic, indent=2))
+          if not ok:
+              raise SystemExit(1)
+          PY
           python -m py_compile run_ivme_strict_research.py
           test -f ivme_experiment/IVME_Strict_MultiResolution_Experiment.pine
           test -f ivme_experiment/IVME_STRICT_ENGINE_RESEARCH_PROTOCOL.txt
+
+      - name: Upload bundle diagnostic
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ivme-strict-bundle-diagnostic
+          path: ivme_bundle_diagnostic.json
+          if-no-files-found: warn
+          retention-days: 1
 
       - name: Run strict multi-resolution research
         run: |
