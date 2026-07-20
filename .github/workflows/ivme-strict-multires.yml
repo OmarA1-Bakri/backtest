@@ -1,0 +1,58 @@
+name: IVME Strict Multi-Resolution Research
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ivme_strict/**"
+      - ".github/workflows/ivme-strict-multires.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PYTHONUNBUFFERED: "1"
+      MPLBACKEND: Agg
+    steps:
+      - name: Check out research branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pandas requests scipy matplotlib pyarrow
+
+      - name: Decode runner
+        run: |
+          cat ivme_strict/payload_* | base64 --decode | gzip --decompress > /tmp/run_ivme_strict_multires.py
+          python -m py_compile /tmp/run_ivme_strict_multires.py
+
+      - name: Run strict multi-resolution experiment
+        run: |
+          python /tmp/run_ivme_strict_multires.py \
+            --output ivme_strict_output \
+            --start 2024-07-20T00:00:00Z \
+            --end 2026-07-20T00:00:00Z \
+            --warmup-days 120
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ivme-strict-multires-phase-0-1
+          path: ivme_strict_output/
+          if-no-files-found: error
+          retention-days: 7
