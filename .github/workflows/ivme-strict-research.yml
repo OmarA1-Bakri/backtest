@@ -33,17 +33,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Cache Binance one-minute data
-        uses: actions/cache@v4
-        with:
-          path: /tmp/ivme_binance_cache
-          key: ivme-binance-1m-btc-tao-2017-2026-v1
-
-      - name: Install research dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install numpy pandas requests scipy matplotlib tabulate pyarrow scikit-learn hmmlearn
-
       - name: Decode and validate research bundle
         run: |
           python - <<'PY'
@@ -54,11 +43,35 @@ jobs:
           import tarfile
           import traceback
 
+          expected_chunks = {
+              "bundle_chunk_00": [8000, "4cfe77b9a8907abd533e5a0ec6b3c19c709b24b14cac363b4f2a0d66c04019a1"],
+              "bundle_chunk_01": [8000, "b753dc20a73183d270d03abee1a9bf2a87e89fef887acdd290f7c444eeef5304"],
+              "bundle_chunk_02": [16000, "d4e76ac44ec97d200535de58d01f499b8fe5cd3411c40624471ca9f7ca91dfb8"],
+              "bundle_chunk_03": [16000, "c2641915d9c4e3b39797e3dcf04c498f39ae72a053945d491b01fa7a9234de51"],
+              "bundle_chunk_04": [16000, "fe726a794ce4b445852928f794bda20967384e762d9a7f883d5472ce7bed2838"],
+              "bundle_chunk_05": [16000, "38d6c3106ebb23302ac18d8db9a72080357e6fefaacb9e2449721b6827bbd920"],
+              "bundle_chunk_06": [16000, "e0af18622fa8107259be3da43c47dcbaabcb935cc409c56fdfc0b8b711f68283"],
+              "bundle_chunk_07": [2836, "54930a550578cc93faa7ce5c00ed1a4e0c39f3783c05530c693ef30a46a2333c"],
+          }
           paths = sorted(pathlib.Path("ivme_strict_research").glob("bundle_chunk_*"))
+          chunks = []
+          for path in paths:
+              payload = path.read_bytes()
+              expected = expected_chunks.get(path.name)
+              actual_sha = hashlib.sha256(payload).hexdigest()
+              chunks.append({
+                  "name": path.name,
+                  "bytes": len(payload),
+                  "sha256": actual_sha,
+                  "expected_bytes": expected[0] if expected else None,
+                  "expected_sha256": expected[1] if expected else None,
+                  "matches": bool(expected and len(payload) == expected[0] and actual_sha == expected[1]),
+              })
           raw = b"".join(p.read_bytes() for p in paths)
           compact = b"".join(raw.split())
           diagnostic = {
-              "chunks": [{"name": p.name, "bytes": p.stat().st_size} for p in paths],
+              "chunks": chunks,
+              "all_chunks_match": len(chunks) == len(expected_chunks) and all(c["matches"] for c in chunks),
               "raw_bytes": len(raw),
               "compact_bytes": len(compact),
               "raw_sha256": hashlib.sha256(raw).hexdigest(),
@@ -77,7 +90,11 @@ jobs:
               with tarfile.open("/tmp/ivme_bundle.tar.gz", "r:gz") as tf:
                   diagnostic["members"] = tf.getnames()
                   tf.extractall(".")
-              ok = True
+              ok = (
+                  diagnostic["all_chunks_match"]
+                  and diagnostic["compact_sha256"] == diagnostic["expected_base64_sha256"]
+                  and diagnostic["archive_sha256"] == diagnostic["expected_archive_sha256"]
+              )
           except Exception as exc:
               diagnostic["error"] = repr(exc)
               diagnostic["traceback"] = traceback.format_exc()
@@ -99,6 +116,17 @@ jobs:
           path: ivme_bundle_diagnostic.json
           if-no-files-found: warn
           retention-days: 1
+
+      - name: Cache Binance one-minute data
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ivme_binance_cache
+          key: ivme-binance-1m-btc-tao-2017-2026-v1
+
+      - name: Install research dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pandas requests scipy matplotlib tabulate pyarrow scikit-learn hmmlearn
 
       - name: Run strict multi-resolution research
         run: |
