@@ -9,7 +9,8 @@ on:
       - ".github/workflows/ivme-runner-inspection.yml"
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   inspect:
@@ -37,3 +38,13 @@ jobs:
           path: ivme_runner_source/
           if-no-files-found: error
           retention-days: 1
+
+      - name: Clean up temporary inspection pull request and branch
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --comment "Temporary runner inspection completed. Closing and removing the execution branch."
+          git push origin --delete "$HEAD_REF" || true
