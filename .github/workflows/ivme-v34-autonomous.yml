@@ -1,0 +1,259 @@
+name: IVME v3.4 Autonomous TDD Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ivme_v34_bundle/**"
+      - ".github/workflows/ivme-v34-autonomous.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: ivme-v34-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      MPLBACKEND: Agg
+      PYTHONUNBUFFERED: "1"
+      IVME_DATA_CACHE: /tmp/ivme_binance_cache
+      BUNDLE_SHA256: 897585c99c2f678a6de4a6b913c350867367d2839e3003d68ea48ce009240a4d
+
+    steps:
+      - name: Check out exact research commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Decode immutable legacy research source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ivme_strict_research/bundle_chunk_* | base64 --decode > /tmp/ivme_legacy.tar.gz
+          tar -xzf /tmp/ivme_legacy.tar.gz
+          test -f run_ivme_strict_research.py
+          test -f ivme_experiment/IVME_Strict_MultiResolution_Experiment.pine
+          test -f ivme_experiment/IVME_STRICT_ENGINE_RESEARCH_PROTOCOL.txt
+          python -m py_compile run_ivme_strict_research.py
+
+      - name: Decode and verify IVME v3.4 committed source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat ivme_v34_bundle/bundle_chunk_* | base64 --decode > /tmp/ivme_v34.tar.gz
+          echo "${BUNDLE_SHA256}  /tmp/ivme_v34.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/ivme_v34.tar.gz
+          test -f pyproject.toml
+          test -f src/ivme_v34/runner.py
+          test -d tests
+
+      - name: Restore Binance one-minute data cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ivme_binance_cache
+          key: ivme-binance-1m-btc-tao-2017-2026-v2
+          restore-keys: |
+            ivme-binance-1m-btc-tao-2017-2026-
+
+      - name: Install pinned research and QA dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip check
+
+      - name: Generate Pine deliverables before validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m ivme_v34.pinegen
+          test -f pine/IVME_v3_4_Strict_Baseline_Strategy.pine
+          test -f pine/IVME_v3_4_Research_Indicator.pine
+          test -f pine/IVME_v3_4_Selected_Strategy.pine
+
+      - name: TDD preflight — compile, lint, tests, deterministic Pine checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts reports
+          python -m compileall -q src tests
+          ruff check src tests
+          pytest -q --junitxml=artifacts/pytest.xml
+          python - <<'PY'
+          import csv
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from ivme_v34.pine_static import validate_pine_tree
+
+          root = ET.parse('artifacts/pytest.xml').getroot()
+          suite = root if root.tag == 'testsuite' else root.find('testsuite')
+          if suite is None:
+              raise SystemExit('JUnit testsuite not found')
+          total = int(suite.attrib.get('tests', 0))
+          failures = int(suite.attrib.get('failures', 0))
+          errors = int(suite.attrib.get('errors', 0))
+          skipped = int(suite.attrib.get('skipped', 0))
+          passed = total - failures - errors - skipped
+          with open('artifacts/unit_test_results.csv', 'w', newline='', encoding='utf-8') as handle:
+              writer = csv.DictWriter(handle, fieldnames=['total','passed','failed','errors','skipped','status'])
+              writer.writeheader()
+              writer.writerow({'total': total, 'passed': passed, 'failed': failures, 'errors': errors, 'skipped': skipped,
+                               'status': 'PASS' if failures == 0 and errors == 0 else 'FAIL'})
+          rows = validate_pine_tree(Path.cwd())
+          with open('artifacts/pine_static_results.csv', 'w', newline='', encoding='utf-8') as handle:
+              writer = csv.DictWriter(handle, fieldnames=['file','check','status'])
+              writer.writeheader(); writer.writerows(rows)
+          failures = [r for r in rows if r['status'] != 'PASS']
+          if failures:
+              raise SystemExit(f'Pine static gate failed: {failures}')
+          PY
+          echo "IVME_TESTS_PASSED=1" >> "$GITHUB_ENV"
+
+      - name: Resolve frozen execution mode
+        id: mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODE="$(tr -d '[:space:]' < ivme_v34_bundle/mode.txt)"
+          case "$MODE" in diagnostic|full) ;; *) echo "Invalid mode: $MODE"; exit 1 ;; esac
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "IVME_RUN_MODE=$MODE" >> "$GITHUB_ENV"
+
+      - name: Run committed IVME v3.4 research
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m ivme_v34.runner \
+            --mode "$IVME_RUN_MODE" \
+            --output artifacts \
+            --start 2017-08-17T00:00:00Z \
+            --end 2026-07-20T00:00:00Z \
+            --bootstrap 10000 \
+            --permutations 5000 \
+            > >(tee artifacts/workflow_stdout.log) \
+            2> >(tee artifacts/workflow_stderr.log >&2)
+
+      - name: Validate exact expected artifact contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          mode = os.environ['IVME_RUN_MODE']
+          required = [
+              'artifacts/run_manifest.json',
+              'artifacts/data_audit.csv',
+              'artifacts/missing_bar_report.csv',
+              'artifacts/unit_test_results.csv',
+              'artifacts/pine_static_results.csv',
+              'artifacts/frozen_trial_registry.json',
+              'artifacts/parity_comparison.csv',
+              'artifacts/baseline_signal_funnel.csv',
+              'artifacts/baseline_rejections.csv',
+              'artifacts/strict_ready_signals.csv',
+              'artifacts/execution_path_rejections.csv',
+              'reports/parity_report.md',
+              'pine/IVME_v3_4_Strict_Baseline_Strategy.pine',
+              'pine/IVME_v3_4_Research_Indicator.pine',
+              'pine/IVME_v3_4_Selected_Strategy.pine',
+          ]
+          if mode == 'diagnostic':
+              required += ['artifacts/diagnostic_conclusion.csv']
+          else:
+              required += [
+                  'artifacts/reviewer_results.csv',
+                  'artifacts/baseline_trades.csv',
+                  'artifacts/baseline_fold_metrics.csv',
+                  'artifacts/candidate_signals.csv',
+                  'artifacts/candidate_rejections.csv',
+                  'artifacts/candidate_trades.csv',
+                  'artifacts/candidate_fold_metrics.csv',
+                  'artifacts/candidate_cost_stress.csv',
+                  'artifacts/bootstrap_results.csv',
+                  'artifacts/permutation_results.csv',
+                  'artifacts/sensitivity_results.csv',
+                  'artifacts/deflated_sharpe_results.csv',
+                  'artifacts/qualification_matrix.csv',
+                  'artifacts/strategy_ranking.csv',
+                  'artifacts/forward_validation_manifest.json',
+                  'reports/final_research_report.md',
+                  'reports/executive_conclusion.md',
+                  'artifacts/RUN_COMPLETE.txt',
+              ]
+          missing = [p for p in required if not Path(p).exists()]
+          if missing:
+              raise SystemExit(f'Missing required artifacts: {missing}')
+          Path('artifacts/artifact_contract.txt').write_text('\n'.join(required) + '\n', encoding='utf-8')
+          PY
+
+      - name: Build reproducible evidence digest
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          find artifacts reports pine src tests -type f \
+            ! -path '*/__pycache__/*' ! -name '*.pyc' -print0 2>/dev/null \
+            | sort -z | xargs -0 sha256sum > artifacts/evidence_sha256.txt || true
+
+      - name: Materialize tested source and compact evidence on permanent branch
+        if: ${{ success() && github.event_name == 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/${IVME_RUN_MODE}
+          cp artifacts/run_manifest.json evidence/${IVME_RUN_MODE}/
+          cp artifacts/data_audit.csv evidence/${IVME_RUN_MODE}/
+          cp artifacts/missing_bar_report.csv evidence/${IVME_RUN_MODE}/
+          cp artifacts/unit_test_results.csv evidence/${IVME_RUN_MODE}/
+          cp artifacts/pine_static_results.csv evidence/${IVME_RUN_MODE}/
+          cp artifacts/baseline_signal_funnel.csv evidence/${IVME_RUN_MODE}/
+          cp artifacts/baseline_rejections.csv evidence/${IVME_RUN_MODE}/
+          cp artifacts/evidence_sha256.txt evidence/${IVME_RUN_MODE}/
+          if [ "$IVME_RUN_MODE" = "diagnostic" ]; then
+            cp artifacts/diagnostic_conclusion.csv evidence/${IVME_RUN_MODE}/
+          else
+            cp artifacts/reviewer_results.csv evidence/${IVME_RUN_MODE}/
+            cp artifacts/qualification_matrix.csv evidence/${IVME_RUN_MODE}/
+            cp artifacts/strategy_ranking.csv evidence/${IVME_RUN_MODE}/
+            cp artifacts/forward_validation_manifest.json evidence/${IVME_RUN_MODE}/
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml src tests pine reports evidence
+          if ! git diff --cached --quiet; then
+            git commit -m "Materialize tested IVME v3.4 ${IVME_RUN_MODE} evidence [skip ci]"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
+
+      - name: Upload complete IVME evidence package
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ivme-v34-${{ steps.mode.outputs.mode || 'failed-preflight' }}-${{ github.run_id }}
+          path: |
+            artifacts/
+            reports/
+            pine/
+            src/
+            tests/
+            pyproject.toml
+          if-no-files-found: error
+          retention-days: 30
