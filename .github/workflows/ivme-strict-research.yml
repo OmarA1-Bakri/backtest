@@ -1,108 +1,15 @@
-name: IVME Strict Multi-Resolution Research
+name: Archived IVME Strict Multi-Resolution Research
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "ivme_strict_research/**"
-      - ".github/workflows/ivme-strict-research.yml"
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  research:
+  archive_notice:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
-    env:
-      MPLBACKEND: Agg
-      PYTHONUNBUFFERED: "1"
-      IVME_DATA_CACHE: /tmp/ivme_binance_cache
-
     steps:
-      - name: Check out research branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Decode and patch research bundle
-        run: |
-          cat ivme_strict_research/bundle_chunk_* | base64 --decode > /tmp/ivme_bundle.tar.gz
-          tar -xzf /tmp/ivme_bundle.tar.gz
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("run_ivme_strict_research.py")
-          source = path.read_text()
-
-          old_early = '''    if len(signal_indices) == 0:\n        return pd.DataFrame()\n'''
-          new_early = '''    if len(signal_indices) == 0:\n        empty_columns = [\n            "symbol", "timeframe_minutes", "signal_bar_index", "signal_time",\n            "entry_time", "direction", "entry_raw", "stop_raw",\n            "target1_raw", "target2_raw", "stop_atr", "signal_quality",\n            "entry_quality", "location_score", "regime", "market_regime",\n            "structure_dir", "secondary_structure_dir", "markov_state",\n            "markov_state_bars", "markov_regime_id", "markov_probability",\n            "quote_volume",\n        ]\n        return pd.DataFrame(columns=empty_columns)\n'''
-          if old_early in source:
-              source = source.replace(old_early, new_early, 1)
-
-          old_final = '''    return pd.DataFrame(records).sort_values("signal_time").reset_index(drop=True)\n'''
-          new_final = '''    result = pd.DataFrame.from_records(records)\n    if result.empty:\n        empty_columns = [\n            "symbol", "timeframe_minutes", "signal_bar_index", "signal_time",\n            "entry_time", "direction", "entry_raw", "stop_raw",\n            "target1_raw", "target2_raw", "stop_atr", "signal_quality",\n            "entry_quality", "location_score", "regime", "market_regime",\n            "structure_dir", "secondary_structure_dir", "markov_state",\n            "markov_state_bars", "markov_regime_id", "markov_probability",\n            "quote_volume",\n        ]\n        return pd.DataFrame(columns=empty_columns)\n    return result.sort_values("signal_time").reset_index(drop=True)\n'''
-          if old_final not in source:
-              raise SystemExit("Expected final candidate-ledger return was not found")
-          source = source.replace(old_final, new_final, 1)
-          path.write_text(source)
-          PY
-          python -m py_compile run_ivme_strict_research.py
-          grep -q 'result = pd.DataFrame.from_records(records)' run_ivme_strict_research.py
-          test -f ivme_experiment/IVME_Strict_MultiResolution_Experiment.pine
-          test -f ivme_experiment/IVME_STRICT_ENGINE_RESEARCH_PROTOCOL.txt
-
-      - name: Cache Binance one-minute data
-        uses: actions/cache@v4
-        with:
-          path: /tmp/ivme_binance_cache
-          key: ivme-binance-1m-btc-tao-2017-2026-v1
-
-      - name: Install research dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install numpy pandas requests scipy matplotlib tabulate pyarrow scikit-learn hmmlearn
-
-      - name: Run strict multi-resolution research
-        id: research
-        shell: bash
-        run: |
-          set +e
-          mkdir -p ivme_strict_research_output
-          python run_ivme_strict_research.py \
-            --output ivme_strict_research_output \
-            --start 2017-08-17T00:00:00Z \
-            --end 2026-07-20T00:00:00Z \
-            --bootstrap-iterations 10000 \
-            --permutation-iterations 300 \
-            > >(tee ivme_strict_research_output/workflow_stdout.log) \
-            2> >(tee ivme_strict_research_output/workflow_stderr.log >&2)
-          status=$?
-          echo "$status" > ivme_strict_research_output/exit_code.txt
-          exit $status
-
-      - name: Upload research artifacts and failure logs
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ivme-strict-multiresolution-research
-          path: ivme_strict_research_output/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Clean up temporary pull request and branch
-        if: ${{ success() }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_REF: ${{ github.head_ref }}
-        run: |
-          gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --comment "Temporary IVME strict research completed; artifacts uploaded. Closing and removing the execution branch."
-          git push origin --delete "$HEAD_REF" || true
+      - run: |
+          echo "Archived workflow retained as immutable run-history documentation."
+          echo "Use ivme-v34-autonomous.yml for active IVME v3.4 research."
