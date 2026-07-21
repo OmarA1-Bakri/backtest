@@ -41,14 +41,21 @@ jobs:
 
           path = Path("run_ivme_strict_research.py")
           source = path.read_text()
-          old = '''    if len(signal_indices) == 0:\n        return pd.DataFrame()\n'''
-          new = '''    if len(signal_indices) == 0:\n        # Preserve the candidate-ledger schema when a timeframe produces no\n        # strict signals. Downstream walk-forward code expects signal_time.\n        empty_columns = [\n            "symbol", "timeframe_minutes", "signal_bar_index", "signal_time",\n            "entry_time", "direction", "entry_raw", "stop_raw",\n            "target1_raw", "target2_raw", "stop_atr", "signal_quality",\n            "entry_quality", "location_score", "regime", "market_regime",\n            "structure_dir", "secondary_structure_dir", "markov_state",\n            "markov_state_bars", "markov_regime_id", "markov_probability",\n            "quote_volume",\n        ]\n        return pd.DataFrame(columns=empty_columns)\n'''
-          if old not in source:
-              raise SystemExit("Expected empty-candidate return block was not found")
-          path.write_text(source.replace(old, new, 1))
+
+          old_early = '''    if len(signal_indices) == 0:\n        return pd.DataFrame()\n'''
+          new_early = '''    if len(signal_indices) == 0:\n        empty_columns = [\n            "symbol", "timeframe_minutes", "signal_bar_index", "signal_time",\n            "entry_time", "direction", "entry_raw", "stop_raw",\n            "target1_raw", "target2_raw", "stop_atr", "signal_quality",\n            "entry_quality", "location_score", "regime", "market_regime",\n            "structure_dir", "secondary_structure_dir", "markov_state",\n            "markov_state_bars", "markov_regime_id", "markov_probability",\n            "quote_volume",\n        ]\n        return pd.DataFrame(columns=empty_columns)\n'''
+          if old_early in source:
+              source = source.replace(old_early, new_early, 1)
+
+          old_final = '''    return pd.DataFrame(records).sort_values("signal_time").reset_index(drop=True)\n'''
+          new_final = '''    result = pd.DataFrame.from_records(records)\n    if result.empty:\n        empty_columns = [\n            "symbol", "timeframe_minutes", "signal_bar_index", "signal_time",\n            "entry_time", "direction", "entry_raw", "stop_raw",\n            "target1_raw", "target2_raw", "stop_atr", "signal_quality",\n            "entry_quality", "location_score", "regime", "market_regime",\n            "structure_dir", "secondary_structure_dir", "markov_state",\n            "markov_state_bars", "markov_regime_id", "markov_probability",\n            "quote_volume",\n        ]\n        return pd.DataFrame(columns=empty_columns)\n    return result.sort_values("signal_time").reset_index(drop=True)\n'''
+          if old_final not in source:
+              raise SystemExit("Expected final candidate-ledger return was not found")
+          source = source.replace(old_final, new_final, 1)
+          path.write_text(source)
           PY
           python -m py_compile run_ivme_strict_research.py
-          grep -q 'return pd.DataFrame(columns=empty_columns)' run_ivme_strict_research.py
+          grep -q 'result = pd.DataFrame.from_records(records)' run_ivme_strict_research.py
           test -f ivme_experiment/IVME_Strict_MultiResolution_Experiment.pine
           test -f ivme_experiment/IVME_STRICT_ENGINE_RESEARCH_PROTOCOL.txt
 
@@ -99,5 +106,3 @@ jobs:
         run: |
           gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --comment "Temporary IVME strict research completed; artifacts uploaded. Closing and removing the execution branch."
           git push origin --delete "$HEAD_REF" || true
-
-# rerun trigger: empty-ledger fix 2026-07-21
